@@ -1,0 +1,8 @@
+# 生成的报告（太多太大）
+*.json
+# 保留主脚本和md报告
+
+# Python
+__pycache__/
+*.pyc
+.env

@@ -16,6 +16,9 @@ on:
           - quick
           - full
 
+permissions:
+  contents: write
+
 jobs:
   debate:
     runs-on: ubuntu-latest

@@ -1,0 +1,109 @@
+name: AI辩论分析
+
+on:
+  workflow_dispatch:
+    inputs:
+      topic:
+        description: '辩论主题'
+        required: true
+        type: string
+      mode:
+        description: '运行模式'
+        required: false
+        default: 'quick'
+        type: choice
+        options:
+          - quick
+          - full
+
+jobs:
+  debate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install aiohttp certifi
+
+      - name: Run debate
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          if [ "${{ inputs.mode }}" = "quick" ]; then
+            python multi_ai_debate_openrouter.py "${{ inputs.topic }}" --quick
+          else
+            python multi_ai_debate_openrouter.py "${{ inputs.topic }}"
+          fi
+
+      - name: Find report file
+        id: find_report
+        run: |
+          REPORT=$(ls -t *.md 2>/dev/null | head -1)
+          if [ -n "$REPORT" ]; then
+            echo "report_file=$REPORT" >> $GITHUB_OUTPUT
+            echo "找到报告: $REPORT"
+          else
+            echo "report_file=" >> $GITHUB_OUTPUT
+            echo "未找到报告文件"
+          fi
+
+      - name: Send to Feishu
+        if: steps.find_report.outputs.report_file != ''
+        env:
+          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
+        run: |
+          REPORT="${{ steps.find_report.outputs.report_file }}"
+          TOPIC="${{ inputs.topic }}"
+
+          # 读取报告内容（限制长度，飞书消息有限制）
+          CONTENT=$(head -c 3000 "$REPORT")
+
+          # 发送到飞书
+          curl -X POST "$FEISHU_WEBHOOK" \
+            -H "Content-Type: application/json" \
+            -d @- << EOF
+          {
+            "msg_type": "interactive",
+            "card": {
+              "header": {
+                "title": {
+                  "tag": "plain_text",
+                  "content": "AI辩论完成: $TOPIC"
+                },
+                "template": "blue"
+              },
+              "elements": [
+                {
+                  "tag": "markdown",
+                  "content": "**辩论主题**: $TOPIC\n\n**报告预览**:\n\n${CONTENT:0:2000}...\n\n[查看完整报告](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+                }
+              ]
+            }
+          }
+          EOF
+
+      - name: Upload report
+        if: steps.find_report.outputs.report_file != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: debate-report
+          path: "*.md"
+          retention-days: 30
+
+      - name: Commit report to repo
+        if: steps.find_report.outputs.report_file != ''
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add *.md *.json 2>/dev/null || true
+          git commit -m "辩论报告: ${{ inputs.topic }}" || echo "No changes to commit"
+          git push || echo "Push failed, maybe no changes"
